@@ -1,0 +1,188 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import nltk
+from textblob import TextBlob
+from matplotlib import pylab
+import re
+import csv
+import json
+import time
+import tweepy
+from tweepy.streaming import StreamListener
+from tweepy import OAuthHandler
+from tweepy import Stream
+
+import warnings
+warnings.filterwarnings('ignore')
+
+# twitter keys ----  https://dev.twitter.com/apps
+
+consumer_key = *** Use your own 
+consumer_secret = *** Use your own 
+access_token = *** Use your own 
+access_token_secret = *** Use your own 
+
+# set twitter keys/tokens
+auth = OAuthHandler(consumer_key, consumer_secret)
+auth.set_access_token(access_token, access_token_secret)
+
+api = tweepy.API(auth)
+
+class TweetStreamListener(StreamListener):
+    # on success
+    def on_data(self, data):
+        # decode json
+        dict_data = json.loads(data)
+
+        if "text" in dict_data.keys():
+            print(dict_data["text"])
+            
+            # write to csv
+            with open('Nafta2.csv', 'a', encoding='utf-8') as f:
+                writer = csv.writer(f, delimiter='\t')
+                # add more
+                writer.writerow([
+                    dict_data["created_at"],
+                    dict_data["text"]
+                ])
+
+        return True
+
+    def on_error(self, status):
+        print(status)
+        
+# create instance of the tweepy tweet stream listener
+listener = TweetStreamListener()
+
+# Collecting the tweets regarding NAFTA
+
+while True:
+    try:
+        print('Twitter streaming...')
+        stream = Stream(auth, listener)
+        stream.filter(track=['nafta'], languages=['en'], stall_warnings=True)
+    except:
+        print('Disconnected...')
+        time.sleep(5)
+        continue 
+
+# Reading csv file containing list of collected Tweets as a Pandas dataframe
+
+df_all = pd.read_csv('nafta2.csv', sep='\t', encoding='utf-8',header = None, names = ['date','tweet'])
+df_all[:3]
+
+# Cleaning tweets: Remove url's and non ascii characters
+
+df_all['tweet_clean'] = df_all['tweet'].apply(lambda row: re.sub(r"http\S+|@\S+", "", row))
+
+df_all['tweet_clean'] = df_all['tweet_clean'].apply(lambda x: ''.join([" " if ord(i) < 32 or ord(i) > 126 else i for i in x]))
+
+df_all[:3]
+
+# Splitting the dataframe into Original tweets and Retweets
+
+df_orig = df_all[~df_all['tweet'].astype(str).str.startswith('RT')]  # original tweets
+
+df_RT   = df_all[df_all['tweet'].astype(str).str.startswith('RT')] # retweets - identified as such if starts with RT
+
+df_orig[:3] # Original Tweets
+
+df_RT[:3] # Retweets
+
+# Getting info on each dataframe: original tweets and Retweets
+
+df_orig.info()
+
+df_RT.info()
+
+# Sentiment Polarity Analysis using TextBlob
+df_orig['sentiment_polarity'] = df_orig['tweet_clean'].apply(lambda tweet_i: TextBlob(tweet_i).sentiment.polarity)
+df_orig['sentiment_subjectivity'] = df_orig['tweet_clean'].apply(lambda tweet_i: TextBlob(tweet_i).sentiment.subjectivity)
+
+df_orig[:5]
+
+# Create a "sentiment" column that classifies a tweet into three categories: Positive, Negative and Neutral
+
+def polarity_Category (row):
+   if row['sentiment_polarity'] >= 0.1 :
+      return 'Positive'
+   if row['sentiment_polarity'] <= -0.1 :
+      return 'Negative'
+   else:
+      return 'Neutral'
+
+df_orig['sentiment'] = df_orig.apply (lambda row: polarity_Category (row),axis=1)
+
+df_orig[:10]
+
+# Identify top 10 negative tweets
+
+df_orig.sort_values('sentiment_polarity', inplace=True)
+negative_tweets = df_orig['sentiment']  == 'Negative'
+df_orig[negative_tweets][['tweet_clean','sentiment_polarity']].head(10)
+
+# Identify top 10 Positive tweets
+
+df_orig.sort_values('sentiment_polarity', inplace=True, ascending=False)
+negative_tweets = df_orig['sentiment']  == 'Positive'
+df_orig[negative_tweets][['tweet_clean','sentiment_polarity']].head(10)
+
+# Distribution of sentiment polarity
+plt.hist(df_orig['sentiment_polarity'])
+plt.show()
+
+df_orig.groupby('sentiment')['date'].count().plot(kind='pie')
+plt.axis('equal')
+plt.show()
+
+# Sentiment Subjectivity Analysis using TextBlob
+
+plt.hist(df_orig['sentiment_subjectivity'])
+plt.show()
+
+# Word Frequency
+
+tweettext = df_orig['tweet_clean']
+
+wordlist = pd.DataFrame()
+for t in tweettext:
+    tx = TextBlob(t)
+    l = list(tx.noun_phrases)
+    if len(l)!=0:
+        wordlist = wordlist.append(l,ignore_index=True)
+
+wordlist[:10]
+
+allword = wordlist.groupby(0).size()
+
+import matplotlib.pyplot as plt
+top20allword = allword.sort_values(0,ascending=False).head(20)
+top20allword.plot(kind='bar',title='Top 20 Noun Phrases')
+plt.show()
+
+# Retweets
+
+# The most retweeted tweets
+
+df_RT.groupby('tweet_clean')['date'].count().reset_index(name='count').sort_values(['count'], ascending=False).head(10)
+
+df_RT_nodups=df_RT.drop_duplicates(subset=['tweet_clean'], keep=False)
+
+df_RT_nodups.info()
+
+df_RT_nodups['sentiment_polarity'] = df_RT_nodups['tweet_clean'].apply(lambda tweet_i: TextBlob(tweet_i).sentiment.polarity)
+df_RT_nodups['sentiment_subjectivity'] = df_RT_nodups['tweet_clean'].apply(lambda tweet_i: TextBlob(tweet_i).sentiment.subjectivity)
+
+df_RT_nodups['sentiment'] = df_RT_nodups.apply (lambda row: polarity_Category (row),axis=1)
+df_RT_nodups[:3]
+
+plt.hist(df_RT_nodups['sentiment_polarity'])
+plt.show()
+
+df_RT_nodups.groupby('sentiment')['date'].count().plot(kind='pie')
+plt.axis('equal')
+plt.show()
+
+plt.hist(df_RT_nodups['sentiment_subjectivity'])
+plt.show()
